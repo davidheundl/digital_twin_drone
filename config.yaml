@@ -1,0 +1,65 @@
+# Digital twin configuration. Everything the simulator knows is in here.
+schema_version: 1
+
+room:
+  # Axis-aligned box. Origin is a floor corner, Z is up. Metres.
+  size: [10.0, 8.0, 3.0]
+  wall_restitution: 0.25      # bounce factor on impact (0 = dead stop, 1 = elastic)
+  wall_friction: 0.4          # tangential velocity damping on contact
+  crash_speed: 3.0            # impact speed (m/s) above which the drone is destroyed
+
+drone:
+  mass: 0.25                  # kg
+  inertia: [0.0013, 0.0013, 0.0024]   # kg m^2, diagonal Ixx Iyy Izz
+  arm_length: 0.125           # m, motor distance from centre
+  body_radius: 0.14           # m, collision sphere
+  motor_max_thrust: 1.55      # N per motor (~2.5:1 thrust-to-weight total)
+  motor_tau: 0.03             # s, first-order spin-up lag
+  torque_coefficient: 0.016   # m, reaction torque per newton of thrust
+  linear_drag: [0.08, 0.08, 0.10]     # N per m/s
+  angular_drag: 2.0e-4        # N m per rad/s
+  initial_position: [5.0, 4.0, 0.0]   # z is overridden to rest on the floor
+  initial_yaw: 0.0            # rad
+
+battery:
+  capacity_mah: 1500.0
+  nominal_voltage: 11.1
+  internal_resistance: 0.05   # ohm, produces voltage sag under load
+  idle_current: 0.4           # A drawn whenever powered on
+  thrust_current_coeff: 7.0   # A per (total newtons)^1.5
+  warn_percent: 25.0
+  critical_percent: 10.0
+
+sensors:
+  noise_enabled: true
+  seed: 12345
+  imu:
+    accel_noise: 0.05         # m/s^2 stddev
+    accel_bias: 0.02
+    gyro_noise: 0.005         # rad/s stddev
+    gyro_bias: 0.003
+  barometer:
+    noise: 0.08               # m stddev
+  rangefinder:
+    noise: 0.01               # m stddev
+    max_range: 6.0
+    min_range: 0.03
+  beams:
+    count: 8                  # horizontal distance beams, evenly spaced in body frame
+    noise: 0.02
+    max_range: 12.0
+
+sim:
+  physics_hz: 1000            # fixed-step integration rate
+  telemetry_hz: 200           # state+sensor messages to clients
+  viewer_hz: 60               # downsampled stream for the 3D viewer
+  time_scale: 1.0             # 1.0 = real time; higher runs faster
+  mode: realtime              # "realtime" (async) or "lockstep" (deterministic)
+  command_timeout_ms: 200     # hold last motor command this long after silence...
+  failsafe_rampdown_ms: 300   # ...then ramp motors to zero over this long
+
+server:
+  host: 127.0.0.1
+  port: 8765
+  viewer_port: 8080
+  log_dir: logs

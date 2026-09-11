@@ -1,0 +1,363 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Drone Twin Viewer</title>
+<style>
+  :root {
+    --bg: #0f1216; --panel: rgba(20,24,30,.82); --line: #2a3341;
+    --text: #dfe6ef; --dim: #8b97a8; --accent: #4fc3f7; --warn: #ffb74d; --bad: #ef5350;
+    --good: #81c784;
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--text);
+         font:13px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace; overflow:hidden; }
+  #canvas-wrap { position:fixed; inset:0; }
+  .panel { position:fixed; background:var(--panel); border:1px solid var(--line);
+           border-radius:8px; padding:12px 14px; backdrop-filter:blur(8px); }
+  #hud { top:14px; left:14px; min-width:260px; }
+  #hud h1 { margin:0 0 10px; font-size:12px; letter-spacing:.14em;
+            text-transform:uppercase; color:var(--dim); font-weight:600; }
+  .row { display:flex; justify-content:space-between; gap:16px; padding:2px 0; }
+  .row span:first-child { color:var(--dim); }
+  .val { font-variant-numeric:tabular-nums; }
+  #mode { font-weight:700; letter-spacing:.05em; }
+  #help { bottom:14px; left:14px; color:var(--dim); font-size:11px; max-width:320px; }
+  #status { top:14px; right:14px; font-size:11px; }
+  .dot { display:inline-block; width:8px; height:8px; border-radius:50%;
+         margin-right:6px; vertical-align:middle; background:var(--bad); }
+  .dot.on { background:var(--good); }
+  #events { bottom:14px; right:14px; width:280px; max-height:200px; overflow:hidden;
+            font-size:11px; }
+  #events div { color:var(--dim); white-space:nowrap; overflow:hidden;
+                text-overflow:ellipsis; }
+  #events div.fresh { color:var(--accent); }
+</style>
+</head>
+<body>
+<div id="canvas-wrap"></div>
+
+<div class="panel" id="hud">
+  <h1>Drone Twin</h1>
+  <div class="row"><span>state</span><span class="val" id="mode">—</span></div>
+  <div class="row"><span>sim time</span><span class="val" id="t">—</span></div>
+  <div class="row"><span>position</span><span class="val" id="pos">—</span></div>
+  <div class="row"><span>velocity</span><span class="val" id="vel">—</span></div>
+  <div class="row"><span>roll/pitch/yaw</span><span class="val" id="rpy">—</span></div>
+  <div class="row"><span>motors</span><span class="val" id="motors">—</span></div>
+  <div class="row"><span>battery</span><span class="val" id="batt">—</span></div>
+  <div class="row"><span>telemetry</span><span class="val" id="rate">—</span></div>
+</div>
+
+<div class="panel" id="status"><span class="dot" id="dot"></span><span id="conn">connecting…</span></div>
+<div class="panel" id="events"></div>
+<div class="panel" id="help">
+  drag to orbit · scroll to zoom · right-drag to pan<br>
+  drone drawn 3× actual size · beams are live rangefinder readings<br>
+  read-only observer — this page never sends control commands
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script>
+const WS_URL = `ws://${location.hostname}:8765`;
+
+// ---------------------------------------------------------------- scene setup
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0f1216);
+scene.fog = new THREE.Fog(0x0f1216, 18, 40);
+
+const camera = new THREE.PerspectiveCamera(55, innerWidth / innerHeight, 0.05, 200);
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+document.getElementById('canvas-wrap').appendChild(renderer.domElement);
+
+scene.add(new THREE.AmbientLight(0xffffff, 0.55));
+const key = new THREE.DirectionalLight(0xffffff, 0.8);
+key.position.set(6, 10, 8);
+scene.add(key);
+
+// Simple orbit camera (no external controls dependency).
+const orbit = { target: new THREE.Vector3(0, 0.8, 0), radius: 11, theta: -0.7, phi: 1.05 };
+function applyCamera() {
+  orbit.phi = Math.max(0.08, Math.min(Math.PI - 0.08, orbit.phi));
+  orbit.radius = Math.max(1.5, Math.min(45, orbit.radius));
+  camera.position.set(
+    orbit.target.x + orbit.radius * Math.sin(orbit.phi) * Math.cos(orbit.theta),
+    orbit.target.y + orbit.radius * Math.cos(orbit.phi),
+    orbit.target.z + orbit.radius * Math.sin(orbit.phi) * Math.sin(orbit.theta));
+  camera.lookAt(orbit.target);
+}
+applyCamera();
+
+let dragging = null, lastX = 0, lastY = 0;
+renderer.domElement.addEventListener('contextmenu', e => e.preventDefault());
+renderer.domElement.addEventListener('pointerdown', e => {
+  dragging = e.button === 2 ? 'pan' : 'orbit'; lastX = e.clientX; lastY = e.clientY;
+  renderer.domElement.setPointerCapture(e.pointerId);
+});
+addEventListener('pointerup', () => { dragging = null; });
+addEventListener('pointermove', e => {
+  if (!dragging) return;
+  const dx = e.clientX - lastX, dy = e.clientY - lastY;
+  lastX = e.clientX; lastY = e.clientY;
+  if (dragging === 'orbit') { orbit.theta += dx * 0.006; orbit.phi -= dy * 0.006; }
+  else {
+    const right = new THREE.Vector3().setFromMatrixColumn(camera.matrix, 0);
+    const up = new THREE.Vector3().setFromMatrixColumn(camera.matrix, 1);
+    orbit.target.addScaledVector(right, -dx * orbit.radius * 0.0013);
+    orbit.target.addScaledVector(up, dy * orbit.radius * 0.0013);
+  }
+  applyCamera();
+});
+renderer.domElement.addEventListener('wheel', e => {
+  e.preventDefault(); orbit.radius *= Math.exp(e.deltaY * 0.0012); applyCamera();
+}, { passive: false });
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+
+// ------------------------------------------------------------------ the world
+// Sim world is Z-up; three.js is Y-up. Map sim (x, y, z) -> three (x, z, -y),
+// with the room re-centred on the origin so orbiting feels natural.
+let room = { size: [10, 8, 3] };
+let roomGroup = null;
+
+function simToThree(p) {
+  return new THREE.Vector3(p[0] - room.size[0] / 2, p[2], -(p[1] - room.size[1] / 2));
+}
+
+function buildRoom() {
+  if (roomGroup) scene.remove(roomGroup);
+  roomGroup = new THREE.Group();
+  const [sx, sy, sz] = room.size;
+
+  const box = new THREE.LineSegments(
+    new THREE.EdgesGeometry(new THREE.BoxGeometry(sx, sz, sy)),
+    new THREE.LineBasicMaterial({ color: 0x3d4b5c }));
+  box.position.y = sz / 2;
+  roomGroup.add(box);
+
+  const floor = new THREE.Mesh(
+    new THREE.PlaneGeometry(sx, sy),
+    new THREE.MeshStandardMaterial({ color: 0x161c24, roughness: 0.95, metalness: 0 }));
+  floor.rotation.x = -Math.PI / 2;
+  roomGroup.add(floor);
+
+  const grid = new THREE.GridHelper(Math.max(sx, sy), Math.max(sx, sy), 0x2a3341, 0x1e2630);
+  grid.position.y = 0.002;
+  roomGroup.add(grid);
+
+  scene.add(roomGroup);
+  orbit.target.set(0, Math.min(1.0, sz / 3), 0);
+  orbit.radius = Math.max(sx, sy) * 0.95;
+  applyCamera();
+}
+buildRoom();
+
+// -------------------------------------------------------------------- the drone
+const drone = new THREE.Group();
+const ARM = 0.125;
+const bodyMat = new THREE.MeshStandardMaterial({ color: 0x4fc3f7, roughness: 0.4, metalness: 0.3 });
+const armMat = new THREE.MeshStandardMaterial({ color: 0x5a6a7d, roughness: 0.6 });
+
+const hull = new THREE.Mesh(new THREE.BoxGeometry(0.10, 0.035, 0.07), bodyMat);
+drone.add(hull);
+const nose = new THREE.Mesh(new THREE.ConeGeometry(0.022, 0.06, 12),
+  new THREE.MeshStandardMaterial({ color: 0xffb74d }));
+nose.rotation.z = -Math.PI / 2;
+nose.position.set(0.075, 0, 0);
+drone.add(nose);
+
+// Motor order matches sim/drone.py: m0 FR, m1 BL, m2 FL, m3 BR (body FLU).
+const motorOffsets = [[+1, -1], [-1, +1], [+1, +1], [-1, -1]];
+const rotors = [];
+motorOffsets.forEach(([fx, fy]) => {
+  const bx = fx * ARM / Math.SQRT2, by = fy * ARM / Math.SQRT2;
+  const tx = bx, tz = -by;
+  const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.006, 0.006, Math.hypot(tx, tz)), armMat);
+  arm.position.set(tx / 2, 0, tz / 2);
+  arm.rotation.z = Math.PI / 2;
+  arm.rotation.y = -Math.atan2(tz, tx);
+  drone.add(arm);
+
+  const disc = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.048, 0.048, 0.004, 20),
+    new THREE.MeshStandardMaterial({ color: 0x2e3a48, transparent: true, opacity: 0.85 }));
+  disc.position.set(tx, 0.014, tz);
+  drone.add(disc);
+  rotors.push(disc);
+});
+// The airframe is 0.25 m across in a room 10 m wide, which renders as a speck.
+// Draw it oversized and say so in the HUD rather than quietly lying about scale.
+const DRONE_SCALE = 3;
+drone.scale.setScalar(DRONE_SCALE);
+scene.add(drone);
+
+// Ground shadow and drop line make the drone's position readable at a glance.
+const shadow = new THREE.Mesh(
+  new THREE.CircleGeometry(0.16 * DRONE_SCALE, 24),
+  new THREE.MeshBasicMaterial({ color: 0x000000, transparent: true, opacity: 0.38 }));
+shadow.rotation.x = -Math.PI / 2;
+shadow.position.y = 0.004;
+scene.add(shadow);
+
+const dropGeom = new THREE.BufferGeometry();
+dropGeom.setAttribute('position', new THREE.BufferAttribute(new Float32Array(6), 3));
+const dropLine = new THREE.Line(dropGeom,
+  new THREE.LineDashedMaterial({ color: 0x4fc3f7, dashSize: 0.08, gapSize: 0.08,
+                                 transparent: true, opacity: 0.45 }));
+scene.add(dropLine);
+
+// Trajectory trail.
+const TRAIL_MAX = 4000;
+const trailPositions = new Float32Array(TRAIL_MAX * 3);
+const trailGeom = new THREE.BufferGeometry();
+trailGeom.setAttribute('position', new THREE.BufferAttribute(trailPositions, 3));
+trailGeom.setDrawRange(0, 0);
+const trail = new THREE.Line(trailGeom, new THREE.LineBasicMaterial({ color: 0x4fc3f7, opacity: 0.55, transparent: true }));
+scene.add(trail);
+let trailCount = 0;
+
+function pushTrail(v) {
+  if (trailCount >= TRAIL_MAX) {
+    trailPositions.copyWithin(0, 3);
+    trailCount = TRAIL_MAX - 1;
+  }
+  trailPositions.set([v.x, v.y, v.z], trailCount * 3);
+  trailCount++;
+  trailGeom.setDrawRange(0, trailCount);
+  trailGeom.attributes.position.needsUpdate = true;
+  trailGeom.computeBoundingSphere();
+}
+
+// Sensor beams.
+let beamLines = null;
+function buildBeams(count) {
+  if (beamLines) scene.remove(beamLines);
+  const geom = new THREE.BufferGeometry();
+  geom.setAttribute('position', new THREE.BufferAttribute(new Float32Array(count * 6), 3));
+  beamLines = new THREE.LineSegments(geom,
+    new THREE.LineBasicMaterial({ color: 0x81c784, transparent: true, opacity: 0.6 }));
+  scene.add(beamLines);
+}
+
+// ----------------------------------------------------------------- telemetry
+const el = id => document.getElementById(id);
+const fmt3 = a => a.map(v => v.toFixed(2).padStart(6)).join(' ');
+let beamCount = 8, beamAngles = [];
+let frames = 0, lastRateCheck = performance.now(), spin = 0, lastSimTime = 0;
+
+function addEvent(name, t) {
+  const box = el('events');
+  const line = document.createElement('div');
+  line.textContent = `t=${(t ?? 0).toFixed(2)}  ${name}`;
+  line.className = 'fresh';
+  box.prepend(line);
+  setTimeout(() => line.classList.remove('fresh'), 1200);
+  while (box.children.length > 9) box.lastChild.remove();
+}
+
+function connect() {
+  const ws = new WebSocket(WS_URL);
+  ws.onopen = () => {
+    el('dot').classList.add('on');
+    el('conn').textContent = 'connected';
+    ws.send(JSON.stringify({ type: 'hello', role: 'observer' }));
+  };
+  ws.onclose = () => {
+    el('dot').classList.remove('on');
+    el('conn').textContent = 'disconnected — retrying';
+    setTimeout(connect, 1200);
+  };
+  ws.onerror = () => ws.close();
+  ws.onmessage = ev => {
+    const msg = JSON.parse(ev.data);
+    if (msg.type === 'hello') {
+      room = msg.room; buildRoom();
+      beamCount = msg.sensors.beam_count;
+      beamAngles = msg.sensors.beam_angles_deg.map(d => d * Math.PI / 180);
+      buildBeams(beamCount);
+      return;
+    }
+    if (msg.type === 'event') { addEvent(msg.event, msg.t); return; }
+    if (msg.type !== 'telemetry') return;
+    render(msg);
+  };
+}
+
+function render(msg) {
+  frames++;
+  const truth = msg.truth;
+  const p = simToThree(truth.position);
+  drone.position.copy(p);
+
+  // Sim quaternion [w,x,y,z] in Z-up FLU -> three.js Y-up. The axis swap
+  // (x, y, z) -> (x, z, -y) applied to the rotation's axis gives this mapping.
+  const [qw, qx, qy, qz] = truth.quaternion;
+  drone.quaternion.set(qx, qz, -qy, qw);
+
+  shadow.position.x = p.x; shadow.position.z = p.z;
+  const shadowScale = Math.max(0.35, 1 - p.y / (room.size[2] * 1.6));
+  shadow.scale.setScalar(shadowScale);
+  shadow.material.opacity = 0.38 * shadowScale;
+  dropGeom.attributes.position.set([p.x, 0.006, p.z, p.x, p.y, p.z]);
+  dropGeom.attributes.position.needsUpdate = true;
+  dropLine.computeLineDistances();
+
+  if (msg.t < lastSimTime - 1e-6) { trailCount = 0; trailGeom.setDrawRange(0, 0); }
+  lastSimTime = msg.t;
+  if (msg.airborne || trailCount === 0) pushTrail(p);
+
+  const cmd = msg.motors.command;
+  spin += 0.35 + 2.2 * (cmd.reduce((a, b) => a + b, 0) / 4);
+  rotors.forEach((r, i) => { r.rotation.y = spin * (i < 2 ? 1 : -1) * (0.4 + cmd[i]); });
+
+  const sensors = msg.sensors;
+  if (beamLines && sensors.valid && sensors.beams) {
+    const arr = beamLines.geometry.attributes.position.array;
+    const dir = new THREE.Vector3();
+    sensors.beams.forEach((dist, i) => {
+      const a = beamAngles[i];
+      // Body-frame beam (cos a, sin a, 0) in sim axes -> three axes, then
+      // rotated by the drone's actual attitude so beams follow roll and pitch.
+      dir.set(Math.cos(a), 0, -Math.sin(a)).applyQuaternion(drone.quaternion);
+      arr.set([p.x, p.y, p.z,
+               p.x + dir.x * dist, p.y + dir.y * dist, p.z + dir.z * dist], i * 6);
+    });
+    beamLines.geometry.attributes.position.needsUpdate = true;
+    beamLines.visible = true;
+  } else if (beamLines) {
+    beamLines.visible = false;
+  }
+
+  const modeEl = el('mode');
+  modeEl.textContent = msg.mode + (msg.airborne ? ' · airborne' : '');
+  modeEl.style.color = msg.mode === 'CRASHED' ? 'var(--bad)'
+    : msg.mode === 'ARMED' ? 'var(--good)'
+    : msg.mode === 'OFF' ? 'var(--dim)' : 'var(--warn)';
+
+  el('t').textContent = msg.t.toFixed(2) + ' s';
+  el('pos').textContent = fmt3(truth.position);
+  el('vel').textContent = fmt3(truth.velocity);
+  el('rpy').textContent = fmt3(truth.euler);
+  el('motors').textContent = cmd.map(v => v.toFixed(2)).join(' ');
+  const b = msg.battery;
+  el('batt').textContent = `${b.percent.toFixed(1)}%  ${b.voltage.toFixed(2)}V`;
+}
+
+setInterval(() => {
+  const now = performance.now();
+  el('rate').textContent = (frames * 1000 / (now - lastRateCheck)).toFixed(0) + ' Hz';
+  frames = 0; lastRateCheck = now;
+}, 1000);
+
+(function loop() { requestAnimationFrame(loop); renderer.render(scene, camera); })();
+connect();
+</script>
+</body>
+</html>
