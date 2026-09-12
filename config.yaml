@@ -22,7 +22,7 @@ drone:
   initial_yaw: 0.0            # rad
 
 battery:
-  capacity_mah: 1500.0
+  capacity_mah: 1500000.0
   nominal_voltage: 11.1
   internal_resistance: 0.05   # ohm, produces voltage sag under load
   idle_current: 0.4           # A drawn whenever powered on
@@ -31,7 +31,7 @@ battery:
   critical_percent: 10.0
 
 sensors:
-  noise_enabled: true
+  noise_enabled: false
   seed: 12345
   imu:
     accel_noise: 0.05         # m/s^2 stddev
