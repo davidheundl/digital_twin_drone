@@ -13,6 +13,7 @@ import numpy as np
 from .battery import Battery
 from .drone import DroneParams, DroneState, GRAVITY, initial_state, integrate_rk4
 from .building import Building
+from .floorplan import load_scenario
 from .sensors import SensorSuite
 from .vecmath import quat_from_euler, quat_normalize, quat_to_euler, quat_to_matrix
 
@@ -31,8 +32,18 @@ CONTACT_PASSES = 4   # deepest-first contact resolution sweeps per step
 class World:
     def __init__(self, cfg):
         self.cfg = cfg
-        self.building = Building.empty_room(cfg["room"])
+        # No `scenario:` means the original bare box, which is what keeps the
+        # default config — and every test written against it — unchanged.
+        scenario = cfg.get("scenario")
+        self.building = (load_scenario(scenario, cfg["room"]) if scenario
+                         else Building.empty_room(cfg["room"]))
         self.params = DroneParams(cfg["drone"])
+        # A floorplan that names an entry point owns where the drone starts;
+        # `drone.initial_position` is a coordinate in an empty box and means
+        # nothing once there are walls to start inside of.
+        spawn = self.building.features_of("spawn")
+        if spawn:
+            self.params.initial_position[:2] = spawn[0].position[:2]
         self.battery = Battery(cfg["battery"])
         self.sensors = SensorSuite(cfg["sensors"], self.params, self.building)
         self.reset()

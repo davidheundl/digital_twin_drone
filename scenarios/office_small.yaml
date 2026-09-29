@@ -1,0 +1,66 @@
+# A small single-storey office: 20 x 16 m, seven rooms off a central corridor.
+#
+# One character per 0.5 m cell. Row 0 is MAXIMUM y, so this reads like a map
+# with north at the top and the origin at the bottom-left corner.
+#
+#   #  wall        .  free space    %  debris pile
+#   +  door        /  stair         e  entry / spawn
+#   v  victim      h  decoy         a  UWB anchor
+#
+# Doorways are two cells (1.0 m) wide. One cell clears the 0.14 m collision
+# sphere on paper but leaves nothing for position-loop error, so it does not
+# count as a door.
+
+name: office_small
+cell: 0.5
+height: 3.0
+
+materials:
+  debris: {z: [0.0, 0.9]}     # low enough to fly over, high enough to hide a victim
+
+grid: |
+  ########################################
+  #a........#.........#.........#.......a#
+  #.........#.........#.........#...../..#
+  #.........#.........#......v..#........#
+  #.........#....%%...#.........#........#
+  #.........+....%....#.........#........#
+  #.........+......h..#.........#........#
+  #.........#.........#.........#........#
+  #....v....#.........#.........#........#
+  #.........#.........#...%%....#........#
+  #.........#.........#....%....#....v...#
+  #.........#.........#.........#........#
+  #.........#.........#.........#........#
+  ####++########++########++########++####
+  #......................................#
+  #.e....................................#
+  #a....................................a#
+  #......................................#
+  ######++###########++###########++######
+  #............#............#............#
+  #............#............#............#
+  #............#............#....h.......#
+  #............#....%%......#............#
+  #............#.....%......#............#
+  #............#........h...#............#
+  #...v........#............#............#
+  #............#............#............#
+  #.......%%...#............#............#
+  #............#............#.......v....#
+  #............#............#............#
+  #a...........#............#...........a#
+  ########################################
+
+# Per-instance overrides, keyed by the id the grid generates: markers are
+# numbered in reading order, top row first, left to right. So the victim on
+# row 3 is v1 and the one on row 28 is v5.
+entities:
+  v1: {detectability: 0.80}   # in the open, mid-room
+  v2: {detectability: 0.65}
+  v3: {detectability: 0.45}   # against the far wall of the north-east room
+  v4: {detectability: 0.70}
+  v5: {detectability: 0.35}   # deepest room from the entry, hardest to reach
+  h1: {detectability: 0.50}
+  h2: {detectability: 0.40}
+  h3: {detectability: 0.55}

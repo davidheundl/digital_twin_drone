@@ -1,8 +1,16 @@
 # Digital twin configuration. Everything the simulator knows is in here.
 schema_version: 1
 
+# Optional. Point this at a scenario file to replace the bare room with an
+# authored building; the shell, its size and the spawn point then come from the
+# floorplan and the `room:` block below supplies only the contact constants.
+# Leave it unset for the empty box the physics tests are written against.
+#
+#   scenario: scenarios/office_small.yaml
+
 room:
   # Axis-aligned box. Origin is a floor corner, Z is up. Metres.
+  # With a scenario loaded, `size` is ignored — the floorplan sets the shell.
   size: [10.0, 8.0, 3.0]
   wall_restitution: 0.25      # bounce factor on impact (0 = dead stop, 1 = elastic)
   wall_friction: 0.4          # tangential velocity damping on contact
