@@ -4,3 +4,5 @@ __pycache__/
 logs/
 .pytest_cache/
 *.egg-info/
+learning/
+scenarios/*.svg

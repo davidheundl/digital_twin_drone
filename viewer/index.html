@@ -60,7 +60,12 @@
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <script>
-const WS_URL = `ws://${location.hostname}:8765`;
+// ?ws=<port> points the viewer at a non-default server, so a test instance
+// can be watched alongside the usual one. Digits only: the hostname is never
+// taken from the query string.
+const WS_PORT_PARAM = new URLSearchParams(location.search).get('ws');
+const WS_PORT = /^\d{1,5}$/.test(WS_PORT_PARAM || '') ? WS_PORT_PARAM : '8765';
+const WS_URL = `ws://${location.hostname}:${WS_PORT}`;
 
 // ---------------------------------------------------------------- scene setup
 const scene = new THREE.Scene();
@@ -249,7 +254,7 @@ function buildBeams(count) {
 // ----------------------------------------------------------------- telemetry
 const el = id => document.getElementById(id);
 const fmt3 = a => a.map(v => v.toFixed(2).padStart(6)).join(' ');
-let beamCount = 8, beamAngles = [];
+let beamCount = 0, beamDirs = [];
 let frames = 0, lastRateCheck = performance.now(), spin = 0, lastSimTime = 0;
 
 function addEvent(name, t) {
@@ -280,7 +285,14 @@ function connect() {
     if (msg.type === 'hello') {
       room = msg.room; buildRoom();
       beamCount = msg.sensors.beam_count;
-      beamAngles = msg.sensors.beam_angles_deg.map(d => d * Math.PI / 180);
+      // Body-frame unit vectors, built once. Sim axes (x fwd, y left, z up)
+      // map to three's (x, z, -y).
+      const elev = msg.sensors.beam_elevations_deg || msg.sensors.beam_angles_deg.map(() => 0);
+      beamDirs = msg.sensors.beam_angles_deg.map((deg, i) => {
+        const a = deg * Math.PI / 180, e = elev[i] * Math.PI / 180;
+        return new THREE.Vector3(Math.cos(e) * Math.cos(a), Math.sin(e),
+                                 -Math.cos(e) * Math.sin(a));
+      });
       buildBeams(beamCount);
       return;
     }
@@ -321,14 +333,14 @@ function render(msg) {
   if (beamLines && sensors.valid && sensors.beams) {
     const arr = beamLines.geometry.attributes.position.array;
     const dir = new THREE.Vector3();
-    sensors.beams.forEach((dist, i) => {
-      const a = beamAngles[i];
-      // Body-frame beam (cos a, sin a, 0) in sim axes -> three axes, then
-      // rotated by the drone's actual attitude so beams follow roll and pitch.
-      dir.set(Math.cos(a), 0, -Math.sin(a)).applyQuaternion(drone.quaternion);
+    // Bounded by beamDirs, not by the telemetry array: a length mismatch would
+    // otherwise write NaN into the buffer and the beams vanish silently.
+    for (let i = 0; i < beamDirs.length && i < sensors.beams.length; i++) {
+      const dist = sensors.beams[i];
+      dir.copy(beamDirs[i]).applyQuaternion(drone.quaternion);
       arr.set([p.x, p.y, p.z,
                p.x + dir.x * dist, p.y + dir.y * dist, p.z + dir.z * dist], i * 6);
-    });
+    }
     beamLines.geometry.attributes.position.needsUpdate = true;
     beamLines.visible = true;
   } else if (beamLines) {

@@ -32,27 +32,6 @@ Open http://127.0.0.1:8080/ for a read-only 3D view (room, drone, trajectory
 trail, live rangefinder beams). It's just another subscriber to the same
 telemetry stream — it can never affect the simulation.
 
-## Writing your own controller
-
-Start with [`examples/minimal_client.py`](examples/minimal_client.py) — the
-entire protocol surface in ~50 lines, in Python. The protocol is plain JSON
-over a WebSocket, so any language with a WebSocket client works equally well.
-
-[`examples/hover_client.py`](examples/hover_client.py) is a **reference
-fixture**, not part of the twin: a conventional PID cascade (altitude → thrust,
-attitude → rate → torque → motor mix) that proves the physics are flyable.
-Read it if you're stuck on the inner loop; otherwise ignore it and build your
-own — that's the whole point.
-
-```
-your program                    this repository
-─────────────                   ───────────────
-state estimator      <── noisy ── sensors (IMU, baro, rangefinder, 8 beams)
-rate/attitude control
-position control                     rigid-body physics
-search algorithm      ── motors ──>  (gravity, drag, motors, battery, walls)
-```
-
 ## Configuration
 
 Everything about the world — room size, airframe mass/inertia, motor limits,

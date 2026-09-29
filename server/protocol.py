@@ -155,11 +155,12 @@ def hello_message(world, runtime) -> dict:
         },
         "sensors": {
             "beam_count": world.sensors.beam_count,
-            "beam_angles_deg": [
-                round(float(a), 2)
-                for a in (360.0 / world.sensors.beam_count)
-                * np.arange(world.sensors.beam_count)
-            ],
+            # Parallel arrays, all of length beam_count and in the same order
+            # as telemetry's `beams`. A client that zips them against a
+            # different length silently reads undefined.
+            "beam_angles_deg": [round(a, 2) for a in world.sensors.beam_azimuth_deg],
+            "beam_elevations_deg": [round(e, 2) for e in world.sensors.beam_elevation_deg],
+            "beam_max_range": float(world.sensors.cfg["beams"]["max_range"]),
             "noise_enabled": world.sensors.noise_enabled,
         },
     }

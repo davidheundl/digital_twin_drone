@@ -12,7 +12,7 @@ import numpy as np
 
 from .battery import Battery
 from .drone import DroneParams, DroneState, GRAVITY, initial_state, integrate_rk4
-from .room import Room
+from .building import Building
 from .sensors import SensorSuite
 from .vecmath import quat_from_euler, quat_normalize, quat_to_euler, quat_to_matrix
 
@@ -25,23 +25,34 @@ STATE_ARMED = "ARMED"
 STATE_CRASHED = "CRASHED"
 
 BOOT_DURATION = 0.5  # s
+CONTACT_PASSES = 4   # deepest-first contact resolution sweeps per step
 
 
 class World:
     def __init__(self, cfg):
         self.cfg = cfg
-        self.room = Room(cfg["room"])
+        self.building = Building.empty_room(cfg["room"])
         self.params = DroneParams(cfg["drone"])
         self.battery = Battery(cfg["battery"])
-        self.sensors = SensorSuite(cfg["sensors"], self.params, self.room)
+        self.sensors = SensorSuite(cfg["sensors"], self.params, self.building)
         self.reset()
+
+    @property
+    def room(self) -> Building:
+        """The building, under the name the protocol and viewer still use."""
+        return self.building
+
+    @room.setter
+    def room(self, building: Building) -> None:
+        self.building = building
 
     # ---------------------------------------------------------------- lifecycle
 
     def reset(self) -> None:
         self.t = 0.0
         self.step_count = 0
-        self.state = initial_state(self.params, self.room.lower[2])
+        self.state = initial_state(
+            self.params, self.room.ground_z(self.params.initial_position[:2]))
         self.mode = STATE_OFF
         self.motor_cmd = np.zeros(4)
         self.last_accel_world = np.zeros(3)
@@ -49,6 +60,7 @@ class World:
         self.sensors.reset()
         self._boot_timer = 0.0
         self._landed = True
+        self._support_z = self.room.ground_z(self.state.position[:2])
         self._pending_events: list[dict] = []
 
     def _emit(self, name: str, **data) -> None:
@@ -168,30 +180,46 @@ class World:
         self.step_count += 1
 
     def _resolve_contacts(self, dt: float) -> None:
-        normal, depth = self.room.penetration(self.state.position, self.params.body_radius)
-
+        radius = self.params.body_radius
+        applied: list[np.ndarray] = []
         on_floor = False
-        if normal is not None:
+
+        # Resolve the deepest contact, then look again. A sphere wedged in a
+        # concave corner touches several surfaces at once, and correcting only
+        # one of them drives it straight into the next.
+        for _ in range(CONTACT_PASSES):
+            hits = self.room.contacts(self.state.position, radius)
+            if not hits:
+                break
+            normal, depth = max(hits, key=lambda hit: hit[1])
             self.state.position = self.state.position + normal * depth
+            applied.append(normal)
+            if normal[2] > 0.5:
+                on_floor = True
+                self._support_z = float(self.state.position[2]) - radius
 
+        impact_speed, impact_normal = 0.0, None
+        for normal in applied:
             v_normal = float(np.dot(self.state.velocity, normal))
-            if v_normal < 0.0:
-                impact_speed = -v_normal
-                if impact_speed > self.room.crash_speed and self.mode == STATE_ARMED:
-                    self._crash(impact_speed)
-                    return
-                if impact_speed > 0.05:
-                    self._emit("collision",
-                               speed=round(impact_speed, 3),
-                               normal=[float(n) for n in normal])
-                v_tangential = self.state.velocity - v_normal * normal
-                self.state.velocity = (
-                    -self.room.restitution * v_normal * normal
-                    + (1.0 - self.room.friction) * v_tangential
-                )
-                self.state.omega = self.state.omega * (1.0 - self.room.friction)
+            if v_normal >= 0.0:
+                continue
+            if -v_normal > impact_speed:
+                impact_speed, impact_normal = -v_normal, normal
+            v_tangential = self.state.velocity - v_normal * normal
+            self.state.velocity = (
+                -self.room.restitution * v_normal * normal
+                + (1.0 - self.room.friction) * v_tangential
+            )
 
-            on_floor = bool(normal[2] > 0.5)
+        if impact_normal is not None:
+            self.state.omega = self.state.omega * (1.0 - self.room.friction)
+            if impact_speed > self.room.crash_speed and self.mode == STATE_ARMED:
+                self._crash(impact_speed)
+                return
+            if impact_speed > 0.05:
+                self._emit("collision",
+                           speed=round(impact_speed, 3),
+                           normal=[float(n) for n in impact_normal])
 
         # Settle on the floor when the rotors cannot lift the airframe. Without
         # this the drone micro-bounces forever instead of just sitting there.
@@ -200,7 +228,7 @@ class World:
             if not self._landed:
                 self._landed = True
                 self._emit("landed", speed=round(float(np.linalg.norm(self.state.velocity)), 3))
-            self.state.position[2] = self.room.lower[2] + self.params.body_radius
+            self.state.position[2] = self._support_z + self.params.body_radius
             self.state.velocity = np.zeros(3)
             self.state.omega = np.zeros(3)
             yaw = float(quat_to_euler(self.state.orientation)[2])

@@ -45,9 +45,17 @@ sensors:
     max_range: 6.0
     min_range: 0.03
   beams:
-    count: 8                  # horizontal distance beams, evenly spaced in body frame
+    # Rings of distance beams by elevation, evenly spaced in azimuth within
+    # each ring. A single horizontal fan cannot see a stairwell, and a drone
+    # that pitches to translate sweeps a "horizontal" fan across floor and
+    # ceiling. Elevation 90 with count 1 is the single zenith beam.
+    rings:
+      - {elevation_deg: 0, count: 16}
+      - {elevation_deg: 30, count: 4}
+      - {elevation_deg: -30, count: 4}
+      - {elevation_deg: 90, count: 1}
     noise: 0.02
-    max_range: 12.0
+    max_range: 8.0            # long beams tilt far off-horizontal; keep them short
 
 sim:
   physics_hz: 1000            # fixed-step integration rate

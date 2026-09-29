@@ -4,22 +4,8 @@ import numpy as np
 import pytest
 
 from sim import World, load_config
+from sim.harness import StubRuntime
 from server.protocol import CommandError, dispatch, parse_message
-
-
-class FakeRuntime:
-    """Minimal stand-in for server.runtime.Runtime."""
-    def __init__(self):
-        self.paused = False
-        self.time_scale = 1.0
-        self.commands = 0
-        self.steps_requested = 0
-
-    def note_command(self):
-        self.commands += 1
-
-    def request_steps(self, n):
-        self.steps_requested += n
 
 
 @pytest.fixture
@@ -29,7 +15,7 @@ def world():
 
 @pytest.fixture
 def runtime():
-    return FakeRuntime()
+    return StubRuntime(load_config())
 
 
 def send(world, runtime, **msg):
